@@ -2,7 +2,10 @@
 Cleaning rules — raw export → cleaned rows + quarantine.
 
 Baseline gồm các failure mode mở rộng (allowlist doc_id, parse ngày, HR stale version).
-Sinh viên thêm ≥3 rule mới: mỗi rule phải ghi `metric_impact` (xem README — chống trivial).
+3 rule mới thêm bởi nhóm (metric_impact ghi trong reports/group_report.md):
+  - stale_hr_content_10d   : HR chunks chứa "10 ngày phép năm" nhưng eff_date ≥ 2026 (lọt qua date-filter baseline)
+  - unclear_export_prefix  : chunks bắt đầu bằng "Nội dung không rõ ràng:" (noise từ export system)
+  - abab_word_repetition   : chunks có cặp từ ABAB liên tiếp (copy-paste error — vd "làm việc làm việc")
 """
 
 from __future__ import annotations
@@ -20,11 +23,26 @@ ALLOWED_DOC_IDS = frozenset(
         "sla_p1_2026",
         "it_helpdesk_faq",
         "hr_leave_policy",
+        "access_control_sop",  # thêm mới — cần cho gq_d10_10 (Level 4 Admin Access)
     }
 )
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _DMY_SLASH = re.compile(r"^(\d{2})/(\d{2})/(\d{4})$")
+
+_UNCLEAR_PREFIX = "Nội dung không rõ ràng:"
+_STALE_HR_MARKER = "10 ngày phép năm"
+
+
+def _has_abab_repetition(text: str) -> bool:
+    """Phát hiện cặp từ ABAB liên tiếp (copy-paste error vd 'làm việc làm việc')."""
+    words = text.split()
+    for i in range(len(words) - 3):
+        pair1 = (words[i].lower(), words[i + 1].lower())
+        pair2 = (words[i + 2].lower(), words[i + 3].lower())
+        if pair1 == pair2:
+            return True
+    return False
 
 
 def _norm_text(s: str) -> str:
@@ -74,9 +92,12 @@ def clean_rows(
     1) Quarantine: doc_id không thuộc allowlist (export lạ / catalog sai).
     2) Chuẩn hoá effective_date sang YYYY-MM-DD; quarantine nếu không parse được.
     3) Quarantine: chunk hr_leave_policy có effective_date < 2026-01-01 (bản HR cũ / conflict version).
-    4) Quarantine: chunk_text rỗng hoặc effective_date rỗng sau chuẩn hoá.
-    5) Loại trùng nội dung chunk_text (giữ bản đầu).
-    6) Fix stale refund: policy_refund_v4 chứa '14 ngày làm việc' → 7 ngày.
+    4) [NEW] Quarantine: hr_leave_policy chứa "10 ngày phép năm" dù eff_date ≥ 2026 (content stale lọt qua date-filter).
+    5) Quarantine: chunk_text rỗng hoặc effective_date rỗng sau chuẩn hoá.
+    6) [NEW] Quarantine: chunk_text bắt đầu bằng "Nội dung không rõ ràng:" (noise prefix từ export system).
+    7) [NEW] Quarantine: chunk_text có cặp từ ABAB liên tiếp (copy-paste bloat — vd "làm việc làm việc").
+    8) Loại trùng nội dung chunk_text (giữ bản đầu).
+    9) Fix stale refund: policy_refund_v4 chứa '14 ngày làm việc' → 7 ngày.
     """
     quarantine: List[Dict[str, Any]] = []
     seen_text: set[str] = set()
@@ -111,8 +132,33 @@ def clean_rows(
             )
             continue
 
+        # [NEW Rule 1] stale_hr_content_10d: HR chunk chứa nội dung chính sách 10 ngày
+        # dù eff_date ≥ 2026-01-01 (export system gán sai ngày cho bản HR 2025).
+        # metric_impact: không có rule này → E6 (hr_leave_no_stale_10d_annual) HALT.
+        if doc_id == "hr_leave_policy" and _STALE_HR_MARKER in text:
+            quarantine.append(
+                {
+                    **raw,
+                    "reason": "stale_hr_content_10d",
+                    "effective_date_normalized": eff_norm,
+                }
+            )
+            continue
+
         if not text:
             quarantine.append({**raw, "reason": "missing_chunk_text"})
+            continue
+
+        # [NEW Rule 2] unclear_export_prefix: export system đánh dấu nội dung mơ hồ.
+        # metric_impact: quarantine_records tăng; loại ambiguous chunks khỏi index.
+        if text.startswith(_UNCLEAR_PREFIX):
+            quarantine.append({**raw, "reason": "unclear_export_prefix"})
+            continue
+
+        # [NEW Rule 3] abab_word_repetition: phát hiện copy-paste error "A B A B".
+        # metric_impact: quarantine_records tăng; tránh bloated chunks nhiễu loạn retrieval.
+        if _has_abab_repetition(text):
+            quarantine.append({**raw, "reason": "abab_word_repetition"})
             continue
 
         key = _norm_text(text)

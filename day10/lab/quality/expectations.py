@@ -112,5 +112,40 @@ def run_expectations(cleaned_rows: List[Dict[str, Any]]) -> Tuple[List[Expectati
         )
     )
 
+    # E7 [NEW]: access_control_sop phải có ít nhất 1 chunk trong cleaned.
+    # Severity halt — thiếu source này khiến agent trả lời sai gq_d10_10.
+    # metric_impact: nếu access_control_sop không được thêm vào allowlist → E7 fail → halt.
+    acs_rows = [r for r in cleaned_rows if r.get("doc_id") == "access_control_sop"]
+    ok7 = len(acs_rows) >= 1
+    results.append(
+        ExpectationResult(
+            "access_control_sop_present",
+            ok7,
+            "halt",
+            f"access_control_sop_count={len(acs_rows)}",
+        )
+    )
+
+    # E8 [NEW]: không còn chunk có cặp từ ABAB liên tiếp (copy-paste bloat đã bị rule lọc).
+    # Severity warn — ABAB chunks không trả lời sai nhưng làm nhiễu retrieval.
+    # metric_impact: inject ABAB row (--no-refund-fix bypass) → E8 warn; pipeline bình thường → E8 pass.
+    def _has_abab(text: str) -> bool:
+        words = (text or "").split()
+        for i in range(len(words) - 3):
+            if (words[i].lower(), words[i + 1].lower()) == (words[i + 2].lower(), words[i + 3].lower()):
+                return True
+        return False
+
+    abab_bad = [r for r in cleaned_rows if _has_abab(r.get("chunk_text") or "")]
+    ok8 = len(abab_bad) == 0
+    results.append(
+        ExpectationResult(
+            "no_abab_word_repetition",
+            ok8,
+            "warn",
+            f"abab_chunks={len(abab_bad)}",
+        )
+    )
+
     halt = any(not r.passed and r.severity == "halt" for r in results)
     return results, halt

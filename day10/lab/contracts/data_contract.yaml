@@ -1,9 +1,9 @@
 # Data contract — Lab Day 10 (tiếp nối artifact CS + IT Helpdesk)
 # Sinh viên bổ sung owner, SLA freshness, và nguồn canonical.
 
-version: "1.0"
+version: "1.1"
 dataset: "kb_chunk_export"
-owner_team: "__TODO__"
+owner_team: "Data Engineering — Lab Day 10"
 
 schema_cleaned:
   chunk_id:
@@ -32,11 +32,23 @@ quality_rules:
   - id: "no_stale_refund_window"
     description: "Không được để chunk policy refund chứa cửa sổ 14 ngày (lệch so với v4 = 7 ngày)"
     severity: "halt"
+  - id: "stale_hr_content_10d"
+    description: "Quarantine hr_leave_policy chứa '10 ngày phép năm' dù eff_date ≥ 2026-01-01"
+    severity: "halt"
+  - id: "unclear_export_prefix"
+    description: "Quarantine chunks bắt đầu bằng 'Nội dung không rõ ràng:' (noise từ export system)"
+    severity: "halt"
+  - id: "abab_word_repetition"
+    description: "Quarantine chunks có cặp từ ABAB liên tiếp (copy-paste bloat)"
+    severity: "warn"
+  - id: "access_control_sop_present"
+    description: "Ít nhất 1 chunk access_control_sop phải tồn tại trong cleaned"
+    severity: "halt"
 
 freshness:
   measured_at: "publish"  # ingest | cleaned | publish
   sla_hours: 24
-  alert_channel: "__TODO__"
+  alert_channel: "Slack #data-pipeline-alerts"
 
 canonical_sources:
   - path: "data/docs/policy_refund_v4.txt"
@@ -47,14 +59,17 @@ canonical_sources:
     doc_id: "it_helpdesk_faq"
   - path: "data/docs/hr_leave_policy.txt"
     doc_id: "hr_leave_policy"
+  - path: "data/docs/access_control_sop.txt"
+    doc_id: "access_control_sop"
 
-# Baseline allowlist export — nhóm mở rộng doc mới phải đồng bộ cleaning_rules + contract.
+# Allowlist đồng bộ với ALLOWED_DOC_IDS trong transform/cleaning_rules.py
 allowed_doc_ids:
   - policy_refund_v4
   - sla_p1_2026
   - it_helpdesk_faq
   - hr_leave_policy
+  - access_control_sop
 
-# Merit/Distinction: có thể đưa cutoff versioning vào env và tham chiếu ở đây (tránh hard-code trong code).
+# Đọc cutoff từ đây để tránh hard-code trong code.
 policy_versioning:
   hr_leave_min_effective_date: "2026-01-01"
